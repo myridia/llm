@@ -20,6 +20,7 @@ MODEL_DEFAULT="qwen3:14b"
 BIND="${OLLAMA_HOST:-0.0.0.0:11434}"
 HOST="${HOST:-127.0.0.1:11434}"
 PORT="${PORT:-11434}"
+CTX_FLOOR="${CTX_FLOOR:-65536}"
 PID_FILE="$DIR/.ollama.pid"
 LOG_FILE="$DIR/.ollama.log"
 MODEL_FILE="$DIR/.model"
@@ -93,18 +94,104 @@ stop_server() {
   fi
 }
 
-status_server() {
-  if systemd_managed; then
-    echo "Running via systemd (ollama.service) — models:"
-    curl -s "http://$HOST/api/tags" | python3 -c "import json,sys; [print('  -', m['name'], f\"{m['size']/1e9:.1f} GB\") for m in json.load(sys.stdin).get('models',[])]" 2>/dev/null || echo "  (none)"
-    return 0
-  fi
-  if server_up; then
-    echo "Running on $HOST — models:"
-    curl -s "http://$HOST/api/tags" | python3 -c "import json,sys; [print('  -', m['name'], f\"{m['size']/1e9:.1f} GB\") for m in json.load(sys.stdin).get('models',[])]" 2>/dev/null || echo "  (none)"
+model_names() {
+  model_table | cut -f1
+}
+
+model_table() {
+  curl -s --max-time 5 "http://$HOST/api/tags" 2>/dev/null | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+for m in d.get("models", []):
+    print("%s\t%.1f" % (m.get("name", ""), m.get("size", 0) / 1e9))
+'
+}
+
+model_installed() {
+  model_names | grep -qF -- "$1"
+}
+
+model_builtin_ctx() {
+  "$OLLAMA_BIN" show "$1" 2>/dev/null | grep -ioE 'context length[[:space:]]+[0-9]+' | grep -oE '[0-9]+' | head -1
+}
+
+model_num_ctx() {
+  "$OLLAMA_BIN" show --parameters "$1" 2>/dev/null | grep -ioE 'num_ctx[[:space:]:]+[0-9]+' | grep -oE '[0-9]+' | head -1
+}
+
+processor_info() {
+  local out rows
+  out="$("$OLLAMA_BIN" ps 2>/dev/null)" || { echo "    (ollama ps failed)"; return 0; }
+  rows="$(printf '%s\n' "$out" | tail -n +2 | awk 'NF {
+    p = ""; for (i = 1; i <= NF; i++) if ($i ~ /%/) p = (p == "" ? $i : p " " $i)
+    printf "    %-22s %s\n", $1, (p == "" ? "processor not reported (older ollama)" : p)
+  }')"
+  if [ -z "$rows" ]; then
+    echo "    no model loaded — load one (task 7 chat, 5 test, 8 opencode), then re-check"
   else
-    echo "Not running."
+    printf '%s\n' "$rows"
   fi
+}
+
+opencode_default_model() {
+  python3 - "$DIR/opencode.json" "$DIR/opencode.jsonc" <<'PYEOF' 2>/dev/null
+import json, re, sys
+for path in sys.argv[1:]:
+    try:
+        raw = open(path).read()
+    except OSError:
+        continue
+    try:
+        cfg = json.loads(raw)
+    except ValueError:
+        raw = re.sub(r"//.*", "", raw)
+        raw = re.sub(r",(\s*[}\]])", r"\1", raw)
+        try:
+            cfg = json.loads(raw)
+        except ValueError:
+            continue
+    if cfg.get("model"):
+        print(cfg["model"])
+        break
+PYEOF
+}
+
+status_server() {
+  local how="manual (nohup)"
+  systemd_managed && how="systemd service (ollama.service)"
+  if systemd_managed || server_up; then
+    echo "Ollama: running — $how"
+    echo "  bind $BIND   probe $HOST"
+  else
+    echo "Ollama: NOT running — start it with task 1."
+    return 1
+  fi
+
+  echo ""
+  echo "  active model (task 10, saved in .model): $MODEL"
+  model_installed "$MODEL" || echo "    ^ NOT INSTALLED — pull with task 4, or switch with task 10"
+
+  local oc_model
+  oc_model="$(opencode_default_model)"
+  if [ -n "$oc_model" ]; then
+    echo "  opencode default model: $oc_model"
+    model_installed "${oc_model#*/}" \
+      || echo "    ^ NOT INSTALLED — opencode cannot resolve it and silently falls back to its own default"
+  fi
+
+  echo ""
+  echo "  models installed (context sizes: task 16):"
+  model_table | while IFS=$'\t' read -r n s; do
+    [ -z "$n" ] && continue
+    printf '    %-22s %6s GB\n' "$n" "$s"
+  done
+
+  echo ""
+  echo "  compute (CPU or GPU, per loaded model):"
+  processor_info
 }
 
 hardware_info() {
@@ -145,7 +232,12 @@ hardware_info() {
   echo ""
   echo "== Ollama =="
   if server_up; then
-    curl -s "http://$HOST/api/tags" | python3 -c "import json,sys; m=json.load(sys.stdin).get('models',[]); [print('  -', x['name'], f\"{x['size']/1e9:.1f} GB\") for x in m] or print('  (no models pulled)')" 2>/dev/null || echo "  (could not list)"
+    if ! model_table | while IFS=$'\t' read -r n s; do
+      [ -z "$n" ] && continue
+      printf '  - %-22s %6s GB\n' "$n" "$s"
+    done; then
+      echo "  (could not list)"
+    fi
   else
     echo "  not running"
   fi
@@ -166,14 +258,12 @@ hardware_info() {
 select_model() {
   local presets=(
     "qwen3:14b|dense 14B, thinking — reliable opencode tool calls (~9 GB, recommended)"
-    "qwen3.6:35b-a3b|CodeAct dialect — unreliable for opencode (emits <tool_code>), fine for chat (~30 GB)"
-    "qwen3-coder:30b|CodeAct/execute — unreliable for opencode, fast bulk code (~19 GB)"
-    "qwen3:32b|dense 32B, thinking (~19 GB)"
-    "qwen3:8b|smallest (~4.7 GB)"
+    "qwen3:32b|dense 32B, thinking — strongest verified, needs ~24 GB free RAM"
+    "qwen3:8b|smallest, fits anywhere (~5 GB)"
   )
   SELECTED=""
   echo "Current model: $MODEL"
-  echo "Presets:"
+  echo "Presets (tasks 20-22 activate and launch opencode directly):"
   local i
   for i in "${!presets[@]}"; do
     printf "  %d) %-18s %s\n" "$((i+1))" "${presets[$i]%|*}" "${presets[$i]#*|}"
@@ -331,25 +421,60 @@ CMDEOF
   echo "  (opencode.json[c] in that dir registers the rules, the ollama provider + models, and the default model)"
 }
 
+show_context() {
+  if ! server_up; then
+    echo "Server not running — start it with task 1 first."
+    return 1
+  fi
+  echo "Context sizes. opencode needs >= $CTX_FLOOR: it appends tool definitions at the"
+  echo "END of the prompt, so a smaller window truncates them and the model 'loses' its tools."
+  echo ""
+  printf '  %-22s %7s %10s %9s  %s\n' MODEL SIZE BUILT-IN NUM_CTX VERDICT
+  local table n s b e eff verdict
+  table="$(model_table)"
+  if [ -z "$table" ]; then
+    echo "  (no models pulled — task 11)"
+    return 0
+  fi
+  while IFS=$'\t' read -r n s; do
+    [ -z "$n" ] && continue
+    b="$(model_builtin_ctx "$n")"
+    e="$(model_num_ctx "$n")"
+    eff="${e:-$b}"
+    if [ -z "$b" ]; then
+      verdict="unknown (ollama show failed)"
+    elif [ "$eff" -lt "$CTX_FLOOR" ] 2>/dev/null; then
+      verdict="TOO SMALL — task 13"
+    else
+      verdict="ok"
+    fi
+    printf '  %-22s %6sG %10s %9s  %s\n' "$n" "$s" "${b:-?}" "${e:--}" "$verdict"
+  done <<< "$table"
+  echo ""
+  echo "  BUILT-IN = model default, NUM_CTX = your saved override ('-' = none)."
+  echo "  Effective window = NUM_CTX when set, else BUILT-IN."
+  echo "  Raise: NUM_CTX=$CTX_FLOOR ./ask.sh  then task 13."
+}
+
 fix_num_ctx() {
   # Ensure every pulled model has at least nctx running context. Ollama's default
   # window can be small (e.g. 4096 on some models) and opencode pushes its tool
   # definitions at the END of the prompt — a too-small window truncates them and
   # the model "forgets" it has tools like `bash`. Only raises; models already at
-  # or above the floor (e.g. qwen3:14b ships with 40960) are skipped.
-  local nctx="${NUM_CTX:-32768}"
+  # or above the floor are skipped.
+  local nctx="${NUM_CTX:-$CTX_FLOOR}"
   if ! server_up; then
     echo "Server not running — start it with task 1 first."
     return 1
   fi
-  echo "Raising any model below num_ctx=$nctx (NUM_CTX env overrides)."
+  echo "Raising any model below num_ctx=$nctx (NUM_CTX env overrides). Current values: task 16."
   local name cur fails=0 list_out
   list_out="$("$OLLAMA_BIN" list --format json 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); lst=d if isinstance(d,list) else d.get('models',[]); [print(m.get('name','')) for m in lst]" 2>/dev/null)" || list_out="$("$OLLAMA_BIN" list 2>/dev/null | tail -n +2 | awk '{print $1}')"
   [ -z "$list_out" ] && { echo "No models found via 'ollama list'."; return 1; }
   while IFS= read -r name; do
     [ -z "$name" ] && continue
     echo "== $name =="
-    cur="$("$OLLAMA_BIN" show "$name" 2>/dev/null | grep -oE 'context length[[:space:]]+[0-9]+' | grep -oE '[0-9]+')"
+    cur="$(model_builtin_ctx "$name")"
     if [ -n "$cur" ] && [ "$cur" -ge "$nctx" ]; then
       echo "  ok — already $cur (>= $nctx), skipping"
       continue
@@ -500,6 +625,14 @@ run_opencode() {
   local bin proj root ans
   bin="$(opencode_bin)" || { echo "opencode not found — install it (https://opencode.ai) or set OPENCODE_BIN."; return 1; }
   server_up || start_server || { echo "Ollama is not running — aborted."; return 1; }
+  if ! model_installed "$MODEL"; then
+    echo "Active model $MODEL is NOT installed — opencode cannot resolve it and will fall back to its own default."
+    read -rp "Pull $MODEL now? [Y/n] " ans
+    case "$ans" in
+      [Nn]*|n|N|no) echo "Aborted."; return 1 ;;
+      *) "$OLLAMA_BIN" pull "$MODEL" || { echo "Pull failed — aborted."; return 1; } ;;
+    esac
+  fi
   local proj_prompt="${PROJECT:-$PWD}"
   if [ -z "${PROJECT:-}" ]; then
     read -rp "Project directory [default: $PWD]: " proj_prompt
@@ -521,6 +654,30 @@ run_opencode() {
   echo "Starting opencode in $proj with local model ($MODEL)"
   cd "$proj" || return 1
   exec "$bin" --model "ollama/$MODEL" "$proj"
+}
+
+use_model() {
+  local tag="$1" label="$2" ans
+  if ! server_up; then
+    echo "Server not running — start it with task 1 first."
+    return 1
+  fi
+  if [ "$tag" = "$MODEL" ] && model_installed "$tag"; then
+    echo "Already active and installed: $tag"
+  else
+    echo "$tag" > "$MODEL_FILE"
+    MODEL="$tag"
+    echo "Active model -> $tag ($label), saved in .model"
+  fi
+  if ! model_installed "$tag"; then
+    echo "Not installed."
+    read -rp "Pull $tag now? [Y/n] " ans
+    case "$ans" in
+      [Nn]*|n|N|no) echo "Aborted — opencode would fall back to its own default without it."; return 1 ;;
+      *) "$OLLAMA_BIN" pull "$tag" || { echo "Pull failed — aborted."; return 1; } ;;
+    esac
+  fi
+  run_opencode
 }
 
 pull_model() {
@@ -623,7 +780,7 @@ while true; do
 echo "hello_llm_translate — local LLM ($MODEL)"
 [ "$NEED_INSTALL" = "1" ] && echo "  !  Ollama not installed yet — run task 6"
 echo "  1  Start Ollama server"
-echo "  2  Status"
+echo "  2  Status (server, active model, opencode default, installed models, CPU/GPU)"
 echo "  3  Stop server"
 echo "  4  Pull model $MODEL"
 echo "  5  Test chat"
@@ -631,12 +788,18 @@ echo "  6  Install Ollama (only if not found)"
 echo "  7  Chat (interactive)"
 echo "  8  OpenCode (agent, local model)"
 echo "  9  Hardware analysis (OS/CPU/RAM/GPU)"
-echo "  10 Switch local model (presets + raw name, saved in .model)"
+echo "  10 Switch local model (presets + raw name, saves in .model, does NOT launch)"
 echo "  11 Download a model (pick preset or type any name, then optionally activate it)"
 echo "  12 Install global opencode setup (rules + ollama provider/models + default model in ~/.config/opencode)"
-echo "  13 Fix Ollama context (num_ctx) for all models (prevents tool-def truncation; NUM_CTX override)"
+echo "  13 Raise Ollama num_ctx on every model below the floor (prevents tool-def truncation; NUM_CTX override, default $CTX_FLOOR)"
 echo "  14 Show rules in effect (which instructions/AGENTS.md/models a project loads; no launch)"
 echo "  15 Install 'oc' launcher (~/.local/bin/oc: prints rules, then starts opencode in cwd)"
+echo "  16 Context sizes (built-in vs saved num_ctx, flags anything under the $CTX_FLOOR opencode floor)"
+echo ""
+echo "  -- load a model in (activate + pull if needed + start opencode) --"
+echo "  20 qwen3:8b   smallest, fits anywhere (~5 GB)"
+echo "  21 qwen3:14b  recommended agent, verified tool calling (~9 GB)"
+echo "  22 qwen3:32b  strongest verified, needs ~24 GB free RAM"
 echo "  0  Exit"
   if ! read -rp "Task: " task; then
     break
@@ -657,6 +820,10 @@ echo "  0  Exit"
     13) fix_num_ctx ;;
     14) show_rules ;;
     15) install_launcher ;;
+    16) show_context ;;
+    20) use_model "qwen3:8b" "smallest, fits anywhere" ;;
+    21) use_model "qwen3:14b" "recommended agent, verified tool calling" ;;
+    22) use_model "qwen3:32b" "strongest verified, needs ~24 GB free RAM" ;;
     0) break ;;
     *) echo "Unknown task" ;;
   esac
