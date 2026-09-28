@@ -122,17 +122,44 @@ model_num_ctx() {
   "$OLLAMA_BIN" show --parameters "$1" 2>/dev/null | grep -ioE 'num_ctx[[:space:]:]+[0-9]+' | grep -oE '[0-9]+' | head -1
 }
 
-processor_info() {
-  local out rows
-  out="$("$OLLAMA_BIN" ps 2>/dev/null)" || { echo "    (ollama ps failed)"; return 0; }
-  rows="$(printf '%s\n' "$out" | tail -n +2 | awk 'NF {
-    p = ""; for (i = 1; i <= NF; i++) if ($i ~ /%/) p = (p == "" ? $i : p " " $i)
+parse_ps() {
+  "$OLLAMA_BIN" ps 2>/dev/null | tail -n +2 | awk 'NF {
+    s = 0; e = 0
+    for (i = 1; i <= NF; i++) {
+      if (s == 0 && $i ~ /%/) s = i
+      if (index($i, "CPU") || index($i, "GPU")) e = i
+    }
+    p = ""
+    if (s > 0 && e >= s) for (i = s; i <= e; i++) p = (p == "" ? $i : p " " $i)
     printf "    %-22s %s\n", $1, (p == "" ? "processor not reported (older ollama)" : p)
-  }')"
-  if [ -z "$rows" ]; then
-    echo "    no model loaded — load one (task 7 chat, 5 test, 8 opencode), then re-check"
-  else
+  }'
+}
+
+processor_info() {
+  local rows ans pid i
+  rows="$(parse_ps)"
+  if [ -n "$rows" ]; then
     printf '%s\n' "$rows"
+    return 0
+  fi
+  echo "    no model loaded — CPU/GPU split is only visible for a resident model"
+  read -rp "    Load $MODEL briefly (~30s) to detect it? [y/N] " ans
+  case "$ans" in
+    [Yy]*) ;;
+    *) echo "    skipped. Detect manually: ollama run $MODEL hi >/dev/null 2>&1 & sleep 8; ollama ps"; return 0 ;;
+  esac
+  "$OLLAMA_BIN" run "$MODEL" "count from 1 to 50" >/dev/null 2>&1 &
+  pid=$!
+  for i in $(seq 1 15); do
+    sleep 2
+    [ -n "$(parse_ps)" ] && break
+  done
+  wait "$pid" 2>/dev/null
+  rows="$(parse_ps)"
+  if [ -n "$rows" ]; then
+    printf '%s\n' "$rows"
+  else
+    echo "    still nothing resident — the run may have failed; try task 5 and look for errors"
   fi
 }
 
@@ -243,13 +270,26 @@ hardware_info() {
   fi
 
   echo ""
-  echo "== Rough CPU-inference guide (RAM/cores) =="
-  local mem_kb
+  echo "== Rough inference guide (VRAM decides GPU split, RAM decides what loads) =="
+  local mem_kb vram_mb
   mem_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+  vram_mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1)
+  if [ -n "${vram_mb:-}" ]; then
+    echo "  VRAM ${vram_mb} MB"
+    if [ "$vram_mb" -ge 22000 ]; then
+      echo "    -> 20 GB models (qwen3:32b) can load mostly on GPU"
+    elif [ "$vram_mb" -ge 10000 ]; then
+      echo "    -> 9 GB models (qwen3:14b) mostly on GPU; 20 GB models will split hard or fail"
+    else
+      echo "    -> under 10 GB: even qwen3:14b splits to CPU; qwen3:8b is the comfortable one"
+    fi
+  else
+    echo "  VRAM unknown (no nvidia-smi) — if task 2 shows 100% CPU there is no usable NVIDIA GPU"
+  fi
   if [ "${mem_kb:-0}" -ge 48000000 ]; then
-    echo "  RAM >= 48 GB  -> 14-32B dense as opencode agent; qwen3.6:35b-a3b / qwen3-coder:30b fit but are CodeAct (unreliable in opencode)"
+    echo "  RAM >= 48 GB  -> any of the 3 registered models load, GPU or not"
   elif [ "${mem_kb:-0}" -ge 24000000 ]; then
-    echo "  RAM >= 24 GB  -> qwen3:14b comfortable"
+    echo "  RAM >= 24 GB  -> qwen3:14b comfortable; qwen3:32b loads but offloads to CPU"
   else
     echo "  RAM < 24 GB   -> qwen3:8b-ish"
   fi
