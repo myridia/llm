@@ -209,3 +209,4 @@ __marimo__/
 # Ollama local server runtime files
 .ollama.pid
 .ollama.log
+.model
