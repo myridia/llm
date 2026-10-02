@@ -700,7 +700,7 @@ run_opencode() {
   cd "$proj" || return 1
   if [ -n "$KITTY_BIN" ]; then
     echo "Starting opencode in $proj with local model ($MODEL) — opening a kitty window"
-    "$KITTY_BIN" --single --directory "$proj" "$bin" --model "ollama/$MODEL" "$proj"
+    "$KITTY_BIN" --single-instance --directory "$proj" "$bin" --model "ollama/$MODEL" "$proj"
     return $?
   fi
   echo "Starting opencode in $proj with local model ($MODEL)"
@@ -751,10 +751,7 @@ interactive_chat() {
   local history="[]"
   local tmpf
   tmpf="$(mktemp)"
-OC_TERMINAL="in this terminal"
-[ -n "$KITTY_BIN" ] && OC_TERMINAL="in a new kitty window"
-
-while true; do
+  while true; do
     printf "\n> "
     if ! IFS= read -r line; then
       break
@@ -828,6 +825,9 @@ case "${1:-}" in
     echo "usage: $0 [--rules [dir]]   (no args = interactive menu)"
     exit 0 ;;
 esac
+
+OC_TERMINAL="in this terminal"
+[ -n "$KITTY_BIN" ] && OC_TERMINAL="in a new kitty window"
 
 while true; do
   echo ""

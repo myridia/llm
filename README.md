@@ -38,7 +38,7 @@ command-line chat (covers both the host and docker containers).
   5  Test chat                send a test request (Thai "hello")
   6  Install Ollama           only needed if the ollama binary is missing
   7  Chat                     interactive chat (streams; /clear, /models, empty line to exit)
-  8  OpenCode                 launch opencode in a project dir (prompt; default cwd) with the local model
+  8  OpenCode                 launch opencode in a project dir (prompt; default cwd) with the local model, in a new kitty window
   14 Show rules in effect     print which instructions/AGENTS.md files + models a project loads (no launch)
   15 Install 'oc' launcher    ~/.local/bin/oc — prints the rules report, then starts opencode in cwd
   9  Hardware analysis        show OS/kernel, CPU (cores + AVX flags), RAM, disk, GPU (nvidia-smi), pulled models
@@ -59,11 +59,12 @@ Defaults & overrides:
 - `BIND` (listen address) ← `OLLAMA_HOST`, default `0.0.0.0:11434` (reachable from containers/other hosts)
 - `HOST` (client URL for status/test/chat) ← `HOST`, default `127.0.0.1:11434`; from a container use `HOST=192.168.43.2:11434`
 - `OLLAMA_BIN` = path to the ollama binary (auto-detected: PATH, /usr/local/bin, /usr/bin, ~/.local/bin), `MODEL` = model name (default `qwen3:14b`, overridable with the `MODEL` env var; the last pick from task 10 is saved in `./.model` and wins unless `MODEL` is exported)
+- `KITTY_BIN` = terminal used for the opencode launch (task 8 and the load-in tasks 20-22), default `kitty`; set `KITTY_BIN=0` (or `none`) to run opencode in the current terminal instead. If kitty is not on PATH the launch falls back to the current terminal automatically, and menu line 8 says which one will be used.
 
 Notes:
 - On the host, Ollama may be a systemd service (`ollama.service`) — `ask.sh` detects it and uses `systemctl` for start/stop/status; inside containers (no systemd) it falls back to manual `nohup` mode.
 - Runtime files: PID/`.log`/`.model` → `./.ollama.pid`, `./.ollama.log`, `./.model` (gitignored).
-- `opencode.json` registers the local models for opencode (default `ollama/qwen3:14b` as the agent, `baseURL http://127.0.0.1:11434/v1`); task 8 launches opencode with `--model ollama/$MODEL` in the chosen project dir. Restart opencode after changing `opencode.json`.
+- `opencode.json` registers the local models for opencode (default `ollama/qwen3:14b` as the agent, `baseURL http://127.0.0.1:11434/v1`); task 8 launches opencode with `--model ollama/$MODEL` in the chosen project dir, in a new kitty window (`kitty --single-instance --directory <proj> …`), so the ask.sh menu stays usable and the model runs in a terminal it owns. Restart opencode after changing `opencode.json`.
 - **Which rules am I in?** Three ways:
   - Inside opencode: type **`/rules`** (installed globally by task 12). It is a custom command that injects the resolver output straight into the prompt (`` !`ask.sh --rules` ``) and asks the model to report it verbatim, so you see exactly which `instructions`, `AGENTS.md` chain, ollama models and default model that session loaded.
   - From a shell: `ask.sh --rules [dir]` (quiet, non-interactive; `ask.sh --help` for usage).
