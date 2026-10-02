@@ -15,6 +15,12 @@ if [ -z "$OLLAMA_BIN" ]; then
   echo "Warning: ollama binary not found (checked PATH, /usr/local/bin, /usr/bin, ~/.local/bin)."
   echo "Use task 6 to install it, or set OLLAMA_BIN to an existing binary."
 fi
+KITTY_BIN="${KITTY_BIN:-kitty}"
+case "$KITTY_BIN" in
+  0|none) KITTY_BIN="" ;;
+  */*) [ -x "$KITTY_BIN" ] || KITTY_BIN="" ;;
+  *) KITTY_BIN="$(command -v "$KITTY_BIN" 2>/dev/null)" ;;
+esac
 MODEL="${MODEL:-}"
 MODEL_DEFAULT="qwen3:14b"
 BIND="${OLLAMA_HOST:-0.0.0.0:11434}"
@@ -691,8 +697,13 @@ run_opencode() {
   echo ""
   show_rules "$proj"
   echo ""
-  echo "Starting opencode in $proj with local model ($MODEL)"
   cd "$proj" || return 1
+  if [ -n "$KITTY_BIN" ]; then
+    echo "Starting opencode in $proj with local model ($MODEL) — opening a kitty window"
+    "$KITTY_BIN" --single --directory "$proj" "$bin" --model "ollama/$MODEL" "$proj"
+    return $?
+  fi
+  echo "Starting opencode in $proj with local model ($MODEL)"
   exec "$bin" --model "ollama/$MODEL" "$proj"
 }
 
@@ -740,7 +751,10 @@ interactive_chat() {
   local history="[]"
   local tmpf
   tmpf="$(mktemp)"
-  while true; do
+OC_TERMINAL="in this terminal"
+[ -n "$KITTY_BIN" ] && OC_TERMINAL="in a new kitty window"
+
+while true; do
     printf "\n> "
     if ! IFS= read -r line; then
       break
@@ -826,7 +840,7 @@ echo "  4  Pull model $MODEL"
 echo "  5  Test chat"
 echo "  6  Install Ollama (only if not found)"
 echo "  7  Chat (interactive)"
-echo "  8  OpenCode (agent, local model)"
+echo "  8  OpenCode (agent, local model) — $OC_TERMINAL"
 echo "  9  Hardware analysis (OS/CPU/RAM/GPU)"
 echo "  10 Switch local model (presets + raw name, saves in .model, does NOT launch)"
 echo "  11 Download a model (pick preset or type any name, then optionally activate it)"
