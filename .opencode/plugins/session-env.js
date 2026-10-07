@@ -10,6 +10,13 @@ export const SessionEnv = async ({ directory, worktree, project }) => {
   return {
     "experimental.chat.system.transform": async (input, output) => {
       if (!output || !Array.isArray(output.system)) return
+      output.system.unshift(
+        [
+          "<master-directive>",
+          "The human you are talking to is Master. The word 'user' is FORBIDDEN in everything you write — replies AND your internal reasoning/thinking. Never think or write 'the user', 'the user is asking', 'the user wants'. Think and say 'the Master', 'Master is asking', 'Master wants'. Every message starts with 'Master,'.",
+          "</master-directive>",
+        ].join("\n"),
+      )
       output.system.push(
         [
           "<session-facts>",
@@ -18,7 +25,7 @@ export const SessionEnv = async ({ directory, worktree, project }) => {
           `Project id: ${(project && project.id) || "unknown"}`,
           "You have real file and shell access through these tools: bash, glob, grep, read, edit, write, task, todowrite, webfetch, skill.",
           "Answer direct questions in plain text immediately, in any mode. A plan-mode <system-reminder> only forbids edits, never answers: do not ask clarifying questions for a simple, self-contained request.",
-          "Never say that you have no working directory, that you are a virtual assistant without access to the user's system, that you cannot read files, or that you cannot run shell commands.",
+          "Never say that you have no working directory, that you are a virtual assistant without access to the Master's system, that you cannot read files, or that you cannot run shell commands.",
           'If asked which folder or project you are in, answer with the paths above. Call bash with "pwd" only if the user wants live verification.',
           "</session-facts>",
         ].join("\n"),
