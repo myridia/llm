@@ -235,8 +235,8 @@ status_server() {
   fi
 
   echo ""
-  echo "  active model (task 10, saved in .model): $MODEL"
-  model_installed "$MODEL" || echo "    ^ NOT INSTALLED — pull with task 4, or switch with task 10"
+  echo "  active model (saved in .model by task 21): $MODEL"
+  model_installed "$MODEL" || echo "    ^ NOT INSTALLED — install with task 4"
 
   local oc_model
   oc_model="$(opencode_default_model)"
@@ -466,7 +466,11 @@ show_context() {
     if [ -z "$b" ]; then
       verdict="unknown (ollama show failed)"
     elif [ "$eff" -lt "$CTX_FLOOR" ] 2>/dev/null; then
-      verdict="TOO SMALL — reinstall via task 4 (bakes the -64k variant)"
+      if model_installed "${n}-$((CTX_FLOOR / 1024))k"; then
+        verdict="ok — base of ${n}-$((CTX_FLOOR / 1024))k"
+      else
+        verdict="TOO SMALL — reinstall via task 4 (bakes the -64k variant)"
+      fi
     else
       verdict="ok"
     fi
