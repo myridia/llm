@@ -334,13 +334,11 @@ hardware_info() {
 
 select_model() {
   local presets=(
-    "qwen3:8b-64k|smallest Qwen3 agent, 64k window (~5 GB)"
-    "qwen3:14b-64k|recommended Qwen3 agent, reliable tool calls (~9 GB)"
-    "qwen3:32b-64k|strongest Qwen3 agent, needs ~24 GB free RAM"
+    "qwen3:14b-64k|the working agent — reliable opencode tool calls, 64k window (~9 GB)"
   )
   SELECTED=""
   echo "Current model: $MODEL"
-  echo "Presets (tasks 20-22 activate and launch opencode directly):"
+  echo "The working agent (or type any raw model name for plain chat):"
   local i
   for i in "${!presets[@]}"; do
     printf "  %d) %-18s %s\n" "$((i+1))" "${presets[$i]%|*}" "${presets[$i]#*|}"
@@ -888,9 +886,7 @@ echo "  8 Launch opencode in a project dir — $OC_TERMINAL"
 echo "  12 Install global opencode setup (rules + provider + default model in ~/.config/opencode)"
 echo "  14 Show rules in effect (what a project loads; no launch)"
 echo "  15 Install 'oc' launcher (~/.local/bin/oc: rules report, then opencode here)"
-echo "  20 Load in qwen3:8b-64k    smallest agent, fits anywhere (~5 GB)"
-echo "  21 Load in qwen3:14b-64k   recommended agent, reliable tool calls (~9 GB)"
-echo "  22 Load in qwen3:32b-64k   strongest agent, needs ~24 GB free RAM"
+echo "  21 Load in qwen3:14b-64k   the working agent, reliable tool calls (~9 GB)"
 echo "  9 Hardware analysis (OS/CPU/RAM/GPU)"
 
 echo "  0 Exit"
@@ -914,9 +910,9 @@ echo "  0 Exit"
     14) show_rules ;;
     15) install_launcher ;;
     16) show_context ;;
-    20) use_model "qwen3:8b-64k" "smallest agent, fits anywhere" ;;
-    21) use_model "qwen3:14b-64k" "recommended agent, reliable tool calls" ;;
-    22) use_model "qwen3:32b-64k" "strongest agent, needs ~24 GB free RAM" ;;
+    20) echo "Removed — qwen3:14b-64k is the only agent." ;;
+    21) use_model "qwen3:14b-64k" "the working agent, reliable tool calls" ;;
+    22) echo "Removed — qwen3:14b-64k is the only agent." ;;
     0) break ;;
     *) echo "Unknown task" ;;
   esac

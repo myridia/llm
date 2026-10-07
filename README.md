@@ -53,7 +53,7 @@ command-line chat (covers both the host and docker containers).
   12 Install global opencode setup (rules + provider + default model)
   14 Show rules in effect (no launch)
   15 Install 'oc' launcher (~/.local/bin/oc)
-  20/21/22 Load in qwen3:8b-64k / 14b-64k / 32b-64k  (+ launch opencode)
+  21 Load in qwen3:14b-64k     the working agent (+ launch opencode)
   9  Hardware analysis
 
   0 Exit
@@ -86,7 +86,7 @@ Notes:
 - Task 12 also installs **two things that fight model stupidity**, both reported by `/rules`:
   - **`~/.config/opencode/AGENTS.md`** (a marked, auto-refreshed block; your own notes preserved). Auto-loaded in every session, so the ground rules land stronger than `instructions`: real working directory + real tool access, call `pwd` when asked where you are, exact tool names only (no `list`/`explore`/`execute`), act-then-explain, never spawn a subagent to answer a question about the session itself.
   - **`.opencode/plugins/session-env.js`** → copied to `~/.config/opencode/plugins/`. opencode already sends a minimal `<env>` block ("Working directory: …, Workspace root folder: …"), which a local model demonstrably ignores — it claims it has "no current folder". The plugin hooks `experimental.chat.system.transform` and appends a `<session-facts>` block (working directory, project root, project id, the real tool list, and an explicit "never claim you have no working directory"). Auto-loaded from the plugins dir, no config change needed.
-- Recommended: `qwen3:14b-64k` (classic function-calling, reliable tool calls with opencode) drives opencode as the agent. Only the three classic `qwen3*` models are registered/offered — the 2026-09 wire capture showed those call opencode's tools reliably, while CodeAct models (`qwen3.6:35b-a3b`, `qwen3-coder:30b`) emit their own tool dialect and are NOT reliable agents. All other candidates (deepseek-r1, qwen2.5-coder, deepseek-coder-v2, devstral, qwen3-coder) were removed from the config and menu; task 10/11 still accept any raw model name for plain chat.
+- Recommended: `qwen3:14b-64k` (classic function-calling, reliable tool calls with opencode) drives opencode as the agent, and that is the **only** model in the config and menu — the 2026-09 wire capture showed classic `qwen3*` calls opencode's tools reliably, while CodeAct models (`qwen3.6:35b-a3b`, `qwen3-coder:30b`) emit their own tool dialect and are NOT reliable agents, and the other candidates (qwen3:8b/32b, deepseek-r1, qwen2.5-coder, deepseek-coder-v2, devstral) were removed. Task 10/11 still accept any raw model name for plain chat.
 - The base `qwen3*` models think first — replies come back empty if `max_tokens < 256` (ask.sh uses 512 for tests, 1024 for chat); reasoning shows in a `reasoning_content` field, mapped via `interleaved`.
 - Models reply in your language; tell them explicitly (e.g. "reply in English") if needed.
 - **Project scope (opencode)**: Unlike this big-pickle agent that can move across directories via `workdir`, an opencode session is anchored to ONE project — and the working directory is **not** simply the folder you typed. From `Project.fromDirectory()`:

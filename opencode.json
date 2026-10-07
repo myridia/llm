@@ -19,34 +19,8 @@
         "apiKey": "ollama"
       },
       "models": {
-        "qwen3:8b-64k": {
-          "name": "Qwen3 8B (local, 64k)",
-          "tool_call": true,
-          "reasoning": true,
-          "interleaved": { "field": "reasoning_content" },
-          "options": {
-            "temperature": 0.2
-          },
-          "limit": {
-            "context": 65536,
-            "output": 4096
-          }
-        },
         "qwen3:14b-64k": {
           "name": "Qwen3 14B (local, 64k)",
-          "tool_call": true,
-          "reasoning": true,
-          "interleaved": { "field": "reasoning_content" },
-          "options": {
-            "temperature": 0.2
-          },
-          "limit": {
-            "context": 65536,
-            "output": 4096
-          }
-        },
-        "qwen3:32b-64k": {
-          "name": "Qwen3 32B (local, 64k)",
           "tool_call": true,
           "reasoning": true,
           "interleaved": { "field": "reasoning_content" },
