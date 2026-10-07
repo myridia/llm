@@ -26,6 +26,17 @@ offline, no cloud API, no Hugging Face account.
 
 After that first setup it is just **1** start → **8** opencode.
 
+## First-session check (3 prompts)
+In the fresh opencode session, run the three prompts below. Each verifies one
+failure mode of a local model:
+
+1. `Run command with exactly: ls -la ~` — must call the bash tool with exactly
+   that command (tool-calling works, no dropped/guessed flags)
+2. `What is your working directory?` — must answer from `pwd`, not guess
+   (real cwd, session facts)
+3. `follow /home/veto/webs/Agents/AGENTS.md` — must read and follow the
+   workspace rules (English, Master, no git)
+
 ## Local LLM server (Ollama + qwen3 agent)
 OpenAI-compatible server on port 11434, usable directly by opencode and by
 command-line chat (host and containers).
