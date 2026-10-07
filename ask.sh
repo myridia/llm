@@ -332,59 +332,6 @@ hardware_info() {
   fi
 }
 
-select_model() {
-  local presets=(
-    "qwen3:14b-64k|the working agent — reliable opencode tool calls, 64k window (~9 GB)"
-  )
-  SELECTED=""
-  echo "Current model: $MODEL"
-  echo "The working agent (or type any raw model name for plain chat):"
-  local i
-  for i in "${!presets[@]}"; do
-    printf "  %d) %-18s %s\n" "$((i+1))" "${presets[$i]%|*}" "${presets[$i]#*|}"
-  done
-  read -rp "Pick a preset number, or type any model name (empty to cancel): " choice
-  [ -z "$choice" ] && { echo "Cancelled."; return 1; }
-  if [ "$choice" -ge 1 ] 2>/dev/null && [ "$choice" -le "${#presets[@]}" ] 2>/dev/null; then
-    SELECTED="${presets[$((choice-1))]%|*}"
-  else
-    SELECTED="$choice"
-  fi
-}
-
-switch_model() {
-  select_model || return
-  if [ "$SELECTED" = "$MODEL" ]; then
-    echo "Already using $MODEL."
-    return
-  fi
-  echo "$SELECTED" > "$MODEL_FILE"
-  MODEL="$SELECTED"
-  echo "Switched to $MODEL (saved in .model). Install it with task 11 if not present yet:"
-  "$OLLAMA_BIN" list 2>/dev/null || echo "  (ollama not available)"
-}
-
-download_model() {
-  select_model || return
-  if [ "$SELECTED" = "$MODEL" ]; then
-    echo "Installing active model: $SELECTED"
-  else
-    echo "Installing: $SELECTED"
-  fi
-  model_ensure "$SELECTED"
-  if [ $? -eq 0 ] && [ "$SELECTED" != "$MODEL" ]; then
-    read -rp "Make $SELECTED the active model too? [y/N] " ans
-    case "$ans" in
-      y|Y|yes)
-        echo "$SELECTED" > "$MODEL_FILE"
-        MODEL="$SELECTED"
-        echo "Switched active model to $MODEL."
-        ;;
-      *) echo "OK — switch later with task 10." ;;
-    esac
-  fi
-}
-
 install_opencode_rules() {
   local conf_dir="$HOME/.config/opencode"
   local rules="$conf_dir/local-model-rules.md"
@@ -508,7 +455,7 @@ show_context() {
   local table n s b e eff verdict
   table="$(model_table)"
   if [ -z "$table" ]; then
-    echo "  (no models pulled — task 11)"
+    echo "  (no models pulled — task 4)"
     return 0
   fi
   while IFS=$'\t' read -r n s; do
@@ -519,7 +466,7 @@ show_context() {
     if [ -z "$b" ]; then
       verdict="unknown (ollama show failed)"
     elif [ "$eff" -lt "$CTX_FLOOR" ] 2>/dev/null; then
-      verdict="TOO SMALL — task 13"
+      verdict="TOO SMALL — reinstall via task 4 (bakes the -64k variant)"
     else
       verdict="ok"
     fi
@@ -527,44 +474,7 @@ show_context() {
   done <<< "$table"
   echo ""
   echo "  BUILT-IN = model default, NUM_CTX = your saved override ('-' = none)."
-  echo "  Effective window = NUM_CTX when set, else BUILT-IN."
-  echo "  Raise: NUM_CTX=$CTX_FLOOR ./ask.sh  then task 13."
-}
-
-fix_num_ctx() {
-  # Ensure a model with num_ctx >= nctx exists for every installed model below
-  # it, by baking a "<name>-<N>k" variant via Modelfile + ollama create (the
-  # ollama REPL /set + /save path is unreliable on some builds). Only creates,
-  # never rebuilds an existing variant and never lowers a window.
-  local nctx="${NUM_CTX:-$CTX_FLOOR}" suffix
-  if ! server_up; then
-    echo "Server not running — start it with task 1 first."
-    return 1
-  fi
-  suffix="$((nctx / 1024))k"
-  echo "Ensuring every installed model has a num_ctx=$nctx variant (NUM_CTX env overrides). Current values: task 16."
-  local name cur eff need failures=0 list_out
-  list_out="$("$OLLAMA_BIN" list --format json 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); lst=d if isinstance(d,list) else d.get('models',[]); [print(m.get('name','')) for m in lst]" 2>/dev/null)" || list_out="$("$OLLAMA_BIN" list 2>/dev/null | tail -n +2 | awk '{print $1}')"
-  [ -z "$list_out" ] && { echo "No models found via 'ollama list'."; return 1; }
-  while IFS= read -r name; do
-    [ -z "$name" ] && continue
-    echo "== $name =="
-    eff="$(model_num_ctx "$name")"
-    [ -n "$eff" ] || eff="$(model_builtin_ctx "$name")"
-    if [ -n "$eff" ] && [ "$eff" -ge "$nctx" ] 2>/dev/null; then
-      echo "  ok — effective window $eff (>= $nctx), nothing to do"
-      continue
-    fi
-    need="$name-$suffix"
-    if model_installed "$need"; then
-      echo "  ok — baked variant $need already exists"
-      continue
-    fi
-    echo "  baking $need (effective window ${eff:-?} < $nctx)..."
-    model_ensure "$need" || failures=$((failures+1))
-  done <<< "$list_out"
-  echo ""
-  echo "Done (failures: $failures). Verify: task 16 (variants show num_ctx >= $nctx)."
+  echo "  Effective window = NUM_CTX when set, else BUILT-IN. A -64k variant is the working agent."
 }
 
 opencode_bin() {
@@ -765,6 +675,54 @@ pull_model() {
   model_ensure "$MODEL"
 }
 
+list_models() {
+  if ! server_up; then
+    echo "Server not running — start it with task 1 first."
+    return 1
+  fi
+  local table total
+  table="$(model_table)"
+  if [ -z "$table" ]; then
+    echo "No models installed."
+    return 0
+  fi
+  echo "Installed models (store: ${OLLAMA_MODELS:-$HOME/.ollama/models}):"
+  printf '  %-24s %9s\n' NAME SIZE
+  while IFS=$'\t' read -r n s; do
+    [ -z "$n" ] && continue
+    printf '  %-24s %7.1f GB\n' "$n" "$s"
+  done <<< "$table"
+  total="$(printf '%s\n' "$table" | awk -F'\t' '{s+=$2} END {printf "%.1f", s}')"
+  echo "  TOTAL: $total GB"
+  echo "  A -64k variant shares the base model's blobs; effective window per tag: task 16."
+}
+
+clear_models() {
+  local names ans n fails=0
+  if ! server_up; then
+    echo "Server not running — start it with task 1 first."
+    return 1
+  fi
+  names="$(model_names)"
+  if [ -z "$names" ]; then
+    echo "No models installed."
+    return 0
+  fi
+  echo "The following models are installed:"
+  echo "$names" | sed 's/^/  /'
+  echo ""
+  read -rp "DELETE ALL of them? Type YES to confirm (you would re-download to use any again): " ans
+  case "$ans" in
+    YES|yes) ;;
+    *) echo "Aborted — nothing deleted."; return 0 ;;
+  esac
+  while IFS= read -r n; do
+    [ -z "$n" ] && continue
+    "$OLLAMA_BIN" rm "$n" >/dev/null 2>&1 && echo "  removed: $n" || { echo "  FAILED: $n"; fails=$((fails+1)); }
+  done <<< "$names"
+  echo "Done (failures: $fails). Active model in .model still reads $MODEL, so task 4/21 would re-install it."
+}
+
 test_chat() {
   curl -s "http://$HOST/v1/chat/completions" \
     -H "Content-Type: application/json" \
@@ -876,10 +834,9 @@ echo "  7 Chat (interactive)"
 
 echo "== models (installed as a <model>-64k variant with num_ctx baked) =="
 echo "  4 Install active model"
-echo "  10 Switch model (presets; saves in .model, does NOT launch)"
-echo "  11 Download/install a model (then optionally activate it)"
-echo "  13 Ensure every model has a 64k context variant (prevents tool truncation)"
 echo "  16 Context-size report (built-in vs baked num_ctx)"
+echo "  17 List all installed models (sizes + store location)"
+echo "  18 Delete ALL installed models (destructive, needs a typed YES to run)"
 
 echo "== opencode (local agent) =="
 echo "  8 Launch opencode in a project dir — $OC_TERMINAL"
@@ -903,13 +860,12 @@ echo "  0 Exit"
     7) interactive_chat ;;
     8) run_opencode ;;
     9) hardware_info ;;
-    10) switch_model ;;
-    11) download_model ;;
     12) install_opencode_rules ;;
-    13) fix_num_ctx ;;
     14) show_rules ;;
     15) install_launcher ;;
     16) show_context ;;
+    17) list_models ;;
+    18) clear_models ;;
     20) echo "Removed — qwen3:14b-64k is the only agent." ;;
     21) use_model "qwen3:14b-64k" "the working agent, reliable tool calls" ;;
     22) echo "Removed — qwen3:14b-64k is the only agent." ;;

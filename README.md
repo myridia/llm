@@ -42,11 +42,10 @@ command-line chat (covers both the host and docker containers).
   7 Chat (interactive)
 
 == models (installed as a <model>-64k variant with num_ctx baked) ==
-  4  Ensure active model is installed
-  10 Switch model (presets + raw name; saves in .model, does NOT launch)
-  11 Download/install a model (then optionally activate it)
-  13 Ensure every model has a 64k context variant (prevents tool truncation)
+  4  Install active model
   16 Context-size report (built-in vs baked num_ctx)
+  17 List all installed models (sizes + store location)
+  18 Delete ALL installed models (destructive, needs a typed YES to run)
 
 == opencode (local agent) ==
   8  Launch opencode in a project dir (default cwd; new kitty window)
@@ -66,13 +65,13 @@ On a new machine:
 4. Pick **1** to start the server, then **8** to launch opencode with the local agent
 
 How models get installed (task 4/11/13/20-22) — **numbered variants, not REPL saves**:
-- `model_ensure "<name>"` builds a deterministic `<name>-64k` variant: `ollama show "<name>" --modelfile` → strip `num_ctx`/`PARAMETER` lines → append `PARAMETER num_ctx 65536` → `ollama create "<name>-64k"`. A plain raw name (no `<base>-<N>k` shape) falls through to `ollama pull`. This is why all models are used through `-64k` tags — the interactive `/set parameter num_ctx` + `/save` REPL path is unreliable on some builds (slash lines get fed to the model as chat), so task 13 bakes variants instead. It only creates; it never rebuilds an existing variant and never lowers a window.
+- `model_ensure "<name>"` builds a deterministic `<name>-64k` variant: `ollama show "<name>" --modelfile` → strip `num_ctx`/`PARAMETER` lines → append `PARAMETER num_ctx 65536` → `ollama create "<name>-64k"`. A plain raw name (no `<base>-<N>k` shape) falls through to `ollama pull`. This is why all models are used through `-64k` tags — the interactive `/set parameter num_ctx` + `/save` REPL path is unreliable on some builds (slash lines get fed to the model as chat), so task 4/21 bake the variant automatically on install. It only creates; it never rebuilds an existing variant and never lowers a window.
 
 Defaults & overrides:
 - `BIND` (listen address) ← `OLLAMA_HOST`, default `0.0.0.0:11434` (reachable from containers/other hosts)
 - `HOST` (client URL for status/test/chat) ← `HOST`, default `127.0.0.1:11434`; from a container use `HOST=192.168.43.2:11434`
-- `OLLAMA_BIN` = path to the ollama binary (auto-detected: PATH, /usr/local/bin, /usr/bin, ~/.local/bin), `MODEL` = model name (default `qwen3:14b-64k`, overridable with the `MODEL` env var; the last pick from task 10 is saved in `./.model` and wins unless `MODEL` is exported)
-- `NUM_CTX`/`CTX_FLOOR` = context target/floor for tasks 13 and 16 (default floor `65536`)
+- `OLLAMA_BIN` = path to the ollama binary (auto-detected: PATH, /usr/local/bin, /usr/bin, ~/.local/bin), `MODEL` = model name (default `qwen3:14b-64k`, overridable with the `MODEL` env var; the active model is saved in `./.model` by task 21 and wins unless `MODEL` is exported)
+- `CTX_FLOOR` = the 65536 window floor checked by task 16
 - `KITTY_BIN` = terminal used for the opencode launch (task 8 and load-in tasks 20-22), default `kitty`; set `KITTY_BIN=0` (or `none`) to run opencode in the current terminal instead. If kitty is not on PATH the launch falls back to the current terminal automatically, and menu line 8 says which one will be used.
 
 Notes:
@@ -96,7 +95,7 @@ Notes:
   - So: verify with `ask.sh --rules` (it prints `cwd` and `project root` exactly as opencode resolves them) or type `/rules` inside a session.
   - Launch it for a specific folder with the positional path: `opencode ~/webs/code/grid --model ollama/qwen3:14b-64k` (task 8 does this for you, and offers `git init` if the folder is not a repo).
   - To reach a folder outside the project mid-session: `/add-directory` (session-scoped, upstream) or allow it in config via `permission.external_directory` — e.g. `{"permission": {"external_directory": {"~/webs/code/**": "allow"}}}`. There are also community plugins with a true `/cd` (npm `opencode-dir`).
-- **Context window (`num_ctx`) — run task 13** after pulling a model. Ollama's built-in window on `qwen3*` is 40960, and opencode pushes its tool definitions at the end of the prompt — if the window is too small they get truncated and the model *denies having tools* (e.g. "I cannot execute shell commands"). Task 13 bakes a `<name>-64k` variant for every installed model below the floor. It only *raises*; verify with task 16 (`ollama show <model>` prints the built-in `Context Length`; the baked override is `ollama show --parameters <name>-64k`).
+- **Context window (`num_ctx`)** — Ollama's built-in window on `qwen3*` is 40960, and opencode pushes its tool definitions at the end of the prompt — if the window is too small they get truncated and the model *denies having tools* (e.g. "I cannot execute shell commands"). That is why models are always installed as `-64k` variants (task 4/21: `model_ensure` bakes `PARAMETER num_ctx 65536` via Modelfile + `ollama create`). Verify with task 16 — variant tags show `NUM_CTX` 65536 (`ollama show <model>` prints the built-in `Context Length`; the baked override is `ollama show --parameters <name>-64k`).
 - **OpenCode needs 64k+ context.** Ollama's integration doc states it flatly, so every agent is used through a `-64k` variant matching `limit.context: 65536`.
 - Some users report better local tool-calling with LM Studio, llama.cpp, or vLLM (`--tool-call-parser qwen3_coder --enable-auto-tool-choice`) instead of the Ollama backend.
 
