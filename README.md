@@ -106,12 +106,7 @@ Notes:
 - Some users report better local tool-calling with LM Studio, llama.cpp, or vLLM (`--tool-call-parser qwen3_coder --enable-auto-tool-choice`) instead of the Ollama backend.
 
 
-## Extra Repository ##
-```
- git remote add codeberg ssh://git@codeberg.org/veto/hello_llm_translate
- git push codeberg
 
-```
 
 
 
