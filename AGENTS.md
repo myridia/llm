@@ -1,29 +1,20 @@
 # AGENTS.md — hello_llm_translate
 
 ## What this is
-Example of translating text using Hugging Face Large Language / Marian MT models (e.g. Helsinki-NLP/opus-mt-en-de).
+Local LLM toolkit: the `ask.sh` menu that manages a private **Ollama** server
+(port 11434) and launches **opencode** with a local `qwen3:14b-64k` agent —
+fully offline, no cloud API.
 
 ## Stack
-- Python 3.13
-- Hugging Face `transformers`, `datasets`, `torch`
-- Poetry / pip virtual env
-- Ollama (local GPU-accelerated LLM server, optional)
-
-## Setup
-```bash
-huggingface-cli login   # get a token at https://huggingface.co
-python3.13 -m venv env
-source env/bin/activate
-pip install -r requirements.txt
-```
+- Shell (`/bin/bash`) — `ask.sh` menu
+- Ollama (local GPU-accelerated LLM server) + opencode (agent runner)
+- JSON — `opencode.json` (provider/model config)
+- Python 3 (small helpers inside `ask.sh` handle JSON tables/state)
 
 ## Run
 ```bash
-# From inside the model dir:
-cd Helsinki-NLP/opus-mt-en-de/
-./main.py
+./ask.sh        # menu: server, chat, models, opencode
 ```
-The script loads the Marian model/tokenizer, translates a sample English string to German and prints it. CUDA is used when available.
 
 ## Local LLM server (Ollama + qwen3 agent)
 OpenAI-compatible, **GPU-accelerated** (measured 2026-09 via task 2: `qwen3:14b` at `11%/89% CPU/GPU` — ~11% spills to CPU, so VRAM sits just under the 9.3 GB model + KV cache; `qwen3:32b` at 20.2 GB would split hard or fail to load). Managed through the `./ask.sh` menu (see README). Status of the setup:
@@ -41,8 +32,6 @@ OpenAI-compatible, **GPU-accelerated** (measured 2026-09 via task 2: `qwen3:14b`
 Verify: `curl -s http://127.0.0.1:11434/v1/chat/completions -H "Content-Type: application/json" -d '{"model":"qwen3:14b-64k","messages":[{"role":"user","content":"Say one word: hello in Thai"}],"max_tokens":512}'`
 
 ## Structure
-- `main.py` — translation script
-- `requirements.txt` — Python dependencies
 - `ask.sh` — Ollama server menu, grouped into four sections and 18 numbered tasks + 1 load-in task: **server** (1 start, 2 status, 3 stop, 6 install), **chat** (5 test, 7 interactive), **models** (4 ensure active model, 16 context-size report, 17 list installed models with sizes + store location, 18 delete ALL installed models — destructive, requires a typed `YES`), **opencode** (8 launch, 12 install global opencode setup, 14 show rules in effect, 15 install `oc` launcher, 21 load in `qwen3:14b-64k`), 9 hardware analysis, 0 exit. Task 2 states the server/bind/probe, the active model from `.model`, the `model` key of this repo's `opencode.json[c]`, the installed models, and a `compute (CPU or GPU, per loaded model)` block parsed from `ollama ps` — so it answers "CPU or GPU" (`100% GPU`, `32% CPU/68% GPU`, `48%/52% CPU/GPU`, `100% CPU`). It flags an active or default model that is not installed (opencode then silently falls back to its own default). With no model resident it offers to load the active model briefly (opt-in, default No) and then reports the split, since `ollama ps` only lists loaded models; declining prints the manual one-liner `ollama run <model> hi >/dev/null 2>&1 & sleep 8; ollama ps`. The startup backend is in `journalctl -u ollama | grep -i "library="` under systemd or the same grep in `./.ollama.log` in `nohup` mode, but that wording is not present in every Ollama version, so the `ollama ps` column is the authoritative source. Task 16 prints `MODEL / SIZE / BUILT-IN / NUM_CTX / VERDICT` per model and marks anything whose effective window (saved/`-64k` `num_ctx` if set, else built-in) is under `CTX_FLOOR`, which defaults to 65536 and matches the opencode requirement. The floor is a single `CTX_FLOOR` env knob used by task 16.
 - `opencode.json` — project opencode config (the local agent model `qwen3:14b-64k` at `limit.context: 65536` with `tool_call: true`, `interleaved: { "field": "reasoning_content" }` and `temperature: 0.2`, default `ollama/qwen3:14b-64k`), loads `instructions`; `permission.task` is denied so the local model cannot offload its work to `general`/`explore` subagents — it must call `bash`/`read`/`glob` directly)
 - `.opencode/local-model-rules.md` — tool-protocol rules auto-loaded in opencode sessions (exact tool names, no guessing, `task` tool for sub-agents; a plain question gets a plain text answer in any mode, and a plan-mode `<system-reminder>` is read as "no edits", never as "don't answer / ask clarifying questions"); task 12 copies it to `~/.config/opencode/` on the host for global effect
@@ -50,10 +39,7 @@ Verify: `curl -s http://127.0.0.1:11434/v1/chat/completions -H "Content-Type: ap
 - `/rules` (in opencode) — task 12 also writes `~/.config/opencode/commands/rules.md`, a custom command whose template injects `!`ask.sh --rules`` output into the prompt and tells the model to report it verbatim. This is the in-session way to see loaded rules; opencode has no built-in equivalent (`/details` is the closest but only toggles tool output).
 - Task 12 (idempotent, re-runnable) merges three things into the host's global `~/.config/opencode/opencode.json[c]`: the rules file into `instructions`, this repo's whole `provider` block (ollama + the model), and its `model` (default `ollama/qwen3:14b-64k`). Needed because a project with no `opencode.json` cannot resolve `ollama/qwen3:14b-64k` — opencode silently falls back to its default model (big-pickle) otherwise. Re-run it after editing `.opencode/local-model-rules.md`.
 - `.model` — state: the active model, written by task 21 (gitignored)
-- `Helsinki-NLP/` — model dir (opus-mt-en-de)
-- `deepseek-ai/` — additional model dir
 
 ## Conventions
-- Do not commit Hugging Face access tokens or real credentials.
 - No comments in code unless asked.
-- Verify: `python -m py_compile main.py`; for `ask.sh`: `bash -n ask.sh`.
+- Verify: `bash -n ask.sh`.
