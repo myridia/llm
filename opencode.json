@@ -1,10 +1,15 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "ollama/qwen3:14b",
+  "model": "ollama/qwen3:14b-64k",
   "instructions": [
     "AGENTS.md",
     ".opencode/local-model-rules.md"
   ],
+  "permission": {
+    "task": {
+      "*": "deny"
+    }
+  },
   "provider": {
     "ollama": {
       "npm": "@ai-sdk/openai-compatible",
@@ -14,11 +19,11 @@
         "apiKey": "ollama"
       },
       "models": {
-        "qwen3:32b": {
-          "name": "Qwen3 32B (local)",
+        "qwen3:8b-64k": {
+          "name": "Qwen3 8B (local, 64k)",
           "tool_call": true,
           "reasoning": true,
-          "interleaved": "reasoning_content",
+          "interleaved": { "field": "reasoning_content" },
           "options": {
             "temperature": 0.2
           },
@@ -27,11 +32,11 @@
             "output": 4096
           }
         },
-        "qwen3:14b": {
-          "name": "Qwen3 14B (local)",
+        "qwen3:14b-64k": {
+          "name": "Qwen3 14B (local, 64k)",
           "tool_call": true,
           "reasoning": true,
-          "interleaved": "reasoning_content",
+          "interleaved": { "field": "reasoning_content" },
           "options": {
             "temperature": 0.2
           },
@@ -40,11 +45,11 @@
             "output": 4096
           }
         },
-        "qwen3:8b": {
-          "name": "Qwen3 8B (local)",
+        "qwen3:32b-64k": {
+          "name": "Qwen3 32B (local, 64k)",
           "tool_call": true,
           "reasoning": true,
-          "interleaved": "reasoning_content",
+          "interleaved": { "field": "reasoning_content" },
           "options": {
             "temperature": 0.2
           },

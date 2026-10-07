@@ -17,6 +17,7 @@ export const SessionEnv = async ({ directory, worktree, project }) => {
           `Project root (git worktree): ${root}`,
           `Project id: ${(project && project.id) || "unknown"}`,
           "You have real file and shell access through these tools: bash, glob, grep, read, edit, write, task, todowrite, webfetch, skill.",
+          "Answer direct questions in plain text immediately, in any mode. A plan-mode <system-reminder> only forbids edits, never answers: do not ask clarifying questions for a simple, self-contained request.",
           "Never say that you have no working directory, that you are a virtual assistant without access to the user's system, that you cannot read files, or that you cannot run shell commands.",
           'If asked which folder or project you are in, answer with the paths above. Call bash with "pwd" only if the user wants live verification.',
           "</session-facts>",

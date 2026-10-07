@@ -22,69 +22,82 @@ cd Helsinki-NLP/opus-mt-en-de/
 ./main.py 
 ```
 
-## Local LLM server (Ollama + qwen3:14b agent)
+## Local LLM server (Ollama + qwen3 agent)
 Run a CPU-only LLM API server on port 11434, usable directly by opencode and by
 command-line chat (covers both the host and docker containers).
 ```
-./ask.sh        # menu: start/stop server, install, pull model, test/chat
+./ask.sh        # menu: start/stop server, install, models, chat, opencode
 ```
 
-### `ask.sh` menu
+### `ask.sh` menu (grouped)
 ```
-  1  Start Ollama server      start serve (binds 0.0.0.0:11434)
-  2  Status                   show server + installed models
-  3  Stop server
-  4  Pull model qwen3:14b  ~10 GB, one-time
-  5  Test chat                send a test request (Thai "hello")
-  6  Install Ollama           only needed if the ollama binary is missing
-  7  Chat                     interactive chat (streams; /clear, /models, empty line to exit)
-  8  OpenCode                 launch opencode in a project dir (prompt; default cwd) with the local model, in a new kitty window
-  14 Show rules in effect     print which instructions/AGENTS.md files + models a project loads (no launch)
-  15 Install 'oc' launcher    ~/.local/bin/oc — prints the rules report, then starts opencode in cwd
-  9  Hardware analysis        show OS/kernel, CPU (cores + AVX flags), RAM, disk, GPU (nvidia-smi), pulled models
-  10 Switch local model       pick a preset or type any model name (saved in .model)
-  11 Download a model         pick a preset or type any name, then optionally make it active
-  12 Install global setup     copy rules + merge ollama provider/models + default model into ~/.config/opencode (host-wide)
-  13 Fix Ollama context      set num_ctx on every pulled model via /set parameter + /save
-  0  Exit
+== server ==
+  1 Start Ollama server
+  2 Status (server, active model, installed models, CPU/GPU)
+  3 Stop server
+  6 Install Ollama (only if not found)
+
+== chat ==
+  5 Test chat
+  7 Chat (interactive)
+
+== models (installed as a <model>-64k variant with num_ctx baked) ==
+  4  Ensure active model is installed
+  10 Switch model (presets + raw name; saves in .model, does NOT launch)
+  11 Download/install a model (then optionally activate it)
+  13 Ensure every model has a 64k context variant (prevents tool truncation)
+  16 Context-size report (built-in vs baked num_ctx)
+
+== opencode (local agent) ==
+  8  Launch opencode in a project dir (default cwd; new kitty window)
+  12 Install global opencode setup (rules + provider + default model)
+  14 Show rules in effect (no launch)
+  15 Install 'oc' launcher (~/.local/bin/oc)
+  20/21/22 Load in qwen3:8b-64k / 14b-64k / 32b-64k  (+ launch opencode)
+  9  Hardware analysis
+
+  0 Exit
 ```
 
 On a new machine:
 1. `./ask.sh`
 2. Pick **6** to install Ollama (a missing binary shows a warning at the menu top; requires `curl`, needs `zstd` on Debian/Ubuntu)
-3. Pick **4** to pull `qwen3:14b`
-4. Pick **1** to start the server
+3. Pick **4** to install the active model `qwen3:14b-64k` (auto-pulls the base and bakes the 64k variant)
+4. Pick **1** to start the server, then **8** to launch opencode with the local agent
+
+How models get installed (task 4/11/13/20-22) — **numbered variants, not REPL saves**:
+- `model_ensure "<name>"` builds a deterministic `<name>-64k` variant: `ollama show "<name>" --modelfile` → strip `num_ctx`/`PARAMETER` lines → append `PARAMETER num_ctx 65536` → `ollama create "<name>-64k"`. A plain raw name (no `<base>-<N>k` shape) falls through to `ollama pull`. This is why all models are used through `-64k` tags — the interactive `/set parameter num_ctx` + `/save` REPL path is unreliable on some builds (slash lines get fed to the model as chat), so task 13 bakes variants instead. It only creates; it never rebuilds an existing variant and never lowers a window.
 
 Defaults & overrides:
 - `BIND` (listen address) ← `OLLAMA_HOST`, default `0.0.0.0:11434` (reachable from containers/other hosts)
 - `HOST` (client URL for status/test/chat) ← `HOST`, default `127.0.0.1:11434`; from a container use `HOST=192.168.43.2:11434`
-- `OLLAMA_BIN` = path to the ollama binary (auto-detected: PATH, /usr/local/bin, /usr/bin, ~/.local/bin), `MODEL` = model name (default `qwen3:14b`, overridable with the `MODEL` env var; the last pick from task 10 is saved in `./.model` and wins unless `MODEL` is exported)
-- `KITTY_BIN` = terminal used for the opencode launch (task 8 and the load-in tasks 20-22), default `kitty`; set `KITTY_BIN=0` (or `none`) to run opencode in the current terminal instead. If kitty is not on PATH the launch falls back to the current terminal automatically, and menu line 8 says which one will be used.
+- `OLLAMA_BIN` = path to the ollama binary (auto-detected: PATH, /usr/local/bin, /usr/bin, ~/.local/bin), `MODEL` = model name (default `qwen3:14b-64k`, overridable with the `MODEL` env var; the last pick from task 10 is saved in `./.model` and wins unless `MODEL` is exported)
+- `NUM_CTX`/`CTX_FLOOR` = context target/floor for tasks 13 and 16 (default floor `65536`)
+- `KITTY_BIN` = terminal used for the opencode launch (task 8 and load-in tasks 20-22), default `kitty`; set `KITTY_BIN=0` (or `none`) to run opencode in the current terminal instead. If kitty is not on PATH the launch falls back to the current terminal automatically, and menu line 8 says which one will be used.
 
 Notes:
 - On the host, Ollama may be a systemd service (`ollama.service`) — `ask.sh` detects it and uses `systemctl` for start/stop/status; inside containers (no systemd) it falls back to manual `nohup` mode.
 - Runtime files: PID/`.log`/`.model` → `./.ollama.pid`, `./.ollama.log`, `./.model` (gitignored).
-- `opencode.json` registers the local models for opencode (default `ollama/qwen3:14b` as the agent, `baseURL http://127.0.0.1:11434/v1`); task 8 launches opencode with `--model ollama/$MODEL` in the chosen project dir, in a new kitty window (`kitty --single-instance --directory <proj> …`), so the ask.sh menu stays usable and the model runs in a terminal it owns. Restart opencode after changing `opencode.json`.
+- `opencode.json` registers the three local agents for opencode (default `ollama/qwen3:14b-64k`, `baseURL http://127.0.0.1:11434/v1`, `interleaved: { "field": "reasoning_content" }`, `temperature: 0.2`, `limit.context: 65536`); task 8 launches opencode with `--model ollama/$MODEL` in the chosen project dir, in a new kitty window (`kitty --single-instance --directory <proj> …`), so the ask.sh menu stays usable and the model runs in a terminal it owns. Restart opencode after changing `opencode.json`.
 - **Which rules am I in?** Three ways:
   - Inside opencode: type **`/rules`** (installed globally by task 12). It is a custom command that injects the resolver output straight into the prompt (`` !`ask.sh --rules` ``) and asks the model to report it verbatim, so you see exactly which `instructions`, `AGENTS.md` chain, ollama models and default model that session loaded.
   - From a shell: `ask.sh --rules [dir]` (quiet, non-interactive; `ask.sh --help` for usage).
   - Before launching: task 8 prints the same report, and task 15 installs an `oc` launcher that does it every time.
 - Task 12 also installs **two things that fight model stupidity**, both reported by `/rules`:
   - **`~/.config/opencode/AGENTS.md`** (a marked, auto-refreshed block; your own notes preserved). Auto-loaded in every session, so the ground rules land stronger than `instructions`: real working directory + real tool access, call `pwd` when asked where you are, exact tool names only (no `list`/`explore`/`execute`), act-then-explain, never spawn a subagent to answer a question about the session itself.
-  - **`.opencode/plugins/session-env.js`** → copied to `~/.config/opencode/plugins/`. opencode already sends a minimal `<env>` block ("Working directory: …, Workspace root folder: …"), which `qwen3:14b` demonstrably ignores — it claims it has "no current folder". The plugin hooks `experimental.chat.system.transform` and appends a `<session-facts>` block (working directory, project root, project id, the real tool list, and an explicit "never claim you have no working directory"). Auto-loaded from the plugins dir, no config change needed.
-- Recommended: `qwen3:14b` (classic function-calling, reliable tool calls with opencode) drives opencode as the agent. The CodeAct models `qwen3.6:35b-a3b` and `qwen3-coder:30b` are NOT reliable in opencode — they emit their own tool dialect (`<tool_code>print(...)` / `execute(...)`) instead of opencode's function calls — use them for chat or bulk code only. Switch with task 10.
-- The base `qwen3*` models think first — replies come back empty if `max_tokens < 256` (ask.sh uses 512 for tests, 1024 for chat); reasoning shows in `reasoning_content` (qwen3.6 returns it in `reasoning`).
+  - **`.opencode/plugins/session-env.js`** → copied to `~/.config/opencode/plugins/`. opencode already sends a minimal `<env>` block ("Working directory: …, Workspace root folder: …"), which a local model demonstrably ignores — it claims it has "no current folder". The plugin hooks `experimental.chat.system.transform` and appends a `<session-facts>` block (working directory, project root, project id, the real tool list, and an explicit "never claim you have no working directory"). Auto-loaded from the plugins dir, no config change needed.
+- Recommended: `qwen3:14b-64k` (classic function-calling, reliable tool calls with opencode) drives opencode as the agent. Only the three classic `qwen3*` models are registered/offered — the 2026-09 wire capture showed those call opencode's tools reliably, while CodeAct models (`qwen3.6:35b-a3b`, `qwen3-coder:30b`) emit their own tool dialect and are NOT reliable agents. All other candidates (deepseek-r1, qwen2.5-coder, deepseek-coder-v2, devstral, qwen3-coder) were removed from the config and menu; task 10/11 still accept any raw model name for plain chat.
+- The base `qwen3*` models think first — replies come back empty if `max_tokens < 256` (ask.sh uses 512 for tests, 1024 for chat); reasoning shows in a `reasoning_content` field, mapped via `interleaved`.
 - Models reply in your language; tell them explicitly (e.g. "reply in English") if needed.
 - **Project scope (opencode)**: Unlike this big-pickle agent that can move across directories via `workdir`, an opencode session is anchored to ONE project — and the working directory is **not** simply the folder you typed. From `Project.fromDirectory()`:
   1. It walks **up** from the launch dir looking for `.git`. If found, the session working directory becomes the **git repository root** (`git rev-parse --show-toplevel`) — not the subfolder you launched from. Launch in `grid/src/components` and you get `grid`.
   2. If no `.git` exists anywhere up the tree, it discards your folder and uses the hardcoded `worktree: "/"` "global" project (upstream bug #15719 / #24694) — the folder is not recognized at all. Fix: `git init` the folder (opencode also needs git for `/undo` and `/redo`).
   3. In a git worktree, sessions attach to the main repo (`--git-common-dir`) but the worktree becomes a "sandbox" of the same project.
   - So: verify with `ask.sh --rules` (it prints `cwd` and `project root` exactly as opencode resolves them) or type `/rules` inside a session.
+  - Launch it for a specific folder with the positional path: `opencode ~/webs/code/grid --model ollama/qwen3:14b-64k` (task 8 does this for you, and offers `git init` if the folder is not a repo).
   - To reach a folder outside the project mid-session: `/add-directory` (session-scoped, upstream) or allow it in config via `permission.external_directory` — e.g. `{"permission": {"external_directory": {"~/webs/code/**": "allow"}}}`. There are also community plugins with a true `/cd` (npm `opencode-dir`).
-  - Launch it for a specific folder with the positional path: `opencode ~/webs/code/grid --model ollama/qwen3:14b` (task 8 does this for you, and offers `git init` if the folder is not a repo).
-  - To reach a folder outside the project from inside a session: `/add-directory` (session-scoped, upstream) or allow it in config via `permission.external_directory` — e.g. `{"permission": {"external_directory": {"~/webs/code/**": "allow"}}}`. There are also community plugins with a true `/cd` (npm `opencode-dir`).
-- **Context window (`num_ctx`) — run task 13** after pulling a model. Ollama defaults can be small (e.g. 4096), and opencode pushes its tool definitions at the end of the prompt — if the window is too small they get truncated and the model *denies having tools* (e.g. "I cannot execute shell commands"). Task 13 raises any model below the floor via `/set parameter num_ctx` + `/save` (`NUM_CTX=65536` recommended). It only *raises*; verify with `ollama show <model>`.
-- **OpenCode needs 64k+ context.** Ollama's integration doc states it flatly, so the classic `qwen3*` agents (`qwen3:14b`, `8b`, `32b`) are registered with `limit.context: 65536`; use `NUM_CTX=65536 ./ask.sh` (task 13) so the model's own `num_ctx` matches. The CodeAct entries stay at 32768 — they are chat/bulk-code only, not agents.
+- **Context window (`num_ctx`) — run task 13** after pulling a model. Ollama's built-in window on `qwen3*` is 40960, and opencode pushes its tool definitions at the end of the prompt — if the window is too small they get truncated and the model *denies having tools* (e.g. "I cannot execute shell commands"). Task 13 bakes a `<name>-64k` variant for every installed model below the floor. It only *raises*; verify with task 16 (`ollama show <model>` prints the built-in `Context Length`; the baked override is `ollama show --parameters <name>-64k`).
+- **OpenCode needs 64k+ context.** Ollama's integration doc states it flatly, so every agent is used through a `-64k` variant matching `limit.context: 65536`.
 - Some users report better local tool-calling with LM Studio, llama.cpp, or vLLM (`--tool-call-parser qwen3_coder --enable-auto-tool-choice`) instead of the Ollama backend.
 
 

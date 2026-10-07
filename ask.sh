@@ -22,7 +22,7 @@ case "$KITTY_BIN" in
   *) KITTY_BIN="$(command -v "$KITTY_BIN" 2>/dev/null)" ;;
 esac
 MODEL="${MODEL:-}"
-MODEL_DEFAULT="qwen3:14b"
+MODEL_DEFAULT="qwen3:14b-64k"
 BIND="${OLLAMA_HOST:-0.0.0.0:11434}"
 HOST="${HOST:-127.0.0.1:11434}"
 PORT="${PORT:-11434}"
@@ -126,6 +126,37 @@ model_builtin_ctx() {
 
 model_num_ctx() {
   "$OLLAMA_BIN" show --parameters "$1" 2>/dev/null | grep -ioE 'num_ctx[[:space:]:]+[0-9]+' | grep -oE '[0-9]+' | head -1
+}
+
+# A "<base>-<N>k" tag (e.g. qwen3:14b-64k) is a local variant of <base> with
+# num_ctx baked in via Modelfile + ollama create. The ollama REPL
+# (/set parameter num_ctx + /save) is unreliable on some builds — it feeds the
+# slash lines to the model as chat — so variants are built deterministically.
+model_ensure() {
+  local tag="$1" base nctx mf
+  model_installed "$tag" && return 0
+  if [[ "$tag" =~ ^(.+)-([0-9]+)k$ ]]; then
+    base="${BASH_REMATCH[1]}"
+    nctx=$(( ${BASH_REMATCH[2]} * 1024 ))
+    if ! model_installed "$base"; then
+      echo "Pulling base $base (needed to build $tag)..."
+      "$OLLAMA_BIN" pull "$base" || { echo "Pull failed — $tag needs it."; return 1; }
+    fi
+    echo "Building $tag (PARAMETER num_ctx $nctx, from $base)..."
+    mf="$(mktemp)"
+    "$OLLAMA_BIN" show --modelfile "$base" > "$mf" 2>/dev/null || { rm -f "$mf"; echo "Failed to read Modelfile for $base."; return 1; }
+    sed -i -e '/num_ctx[[:space:]]/d' "$mf"
+    printf 'PARAMETER num_ctx %s\n' "$nctx" >> "$mf"
+    if "$OLLAMA_BIN" create "$tag" -f "$mf" >/dev/null 2>&1; then
+      rm -f "$mf"
+      echo "Done: $tag carries num_ctx $nctx."
+      return 0
+    fi
+    rm -f "$mf"
+    echo "Failed to create $tag."
+    return 1
+  fi
+  "$OLLAMA_BIN" pull "$tag"
 }
 
 parse_ps() {
@@ -303,9 +334,9 @@ hardware_info() {
 
 select_model() {
   local presets=(
-    "qwen3:14b|dense 14B, thinking — reliable opencode tool calls (~9 GB, recommended)"
-    "qwen3:32b|dense 32B, thinking — strongest verified, needs ~24 GB free RAM"
-    "qwen3:8b|smallest, fits anywhere (~5 GB)"
+    "qwen3:8b-64k|smallest Qwen3 agent, 64k window (~5 GB)"
+    "qwen3:14b-64k|recommended Qwen3 agent, reliable tool calls (~9 GB)"
+    "qwen3:32b-64k|strongest Qwen3 agent, needs ~24 GB free RAM"
   )
   SELECTED=""
   echo "Current model: $MODEL"
@@ -331,18 +362,18 @@ switch_model() {
   fi
   echo "$SELECTED" > "$MODEL_FILE"
   MODEL="$SELECTED"
-  echo "Switched to $MODEL (saved in .model). Pull it with task 4 or 11 if not present yet:"
+  echo "Switched to $MODEL (saved in .model). Install it with task 11 if not present yet:"
   "$OLLAMA_BIN" list 2>/dev/null || echo "  (ollama not available)"
 }
 
 download_model() {
   select_model || return
   if [ "$SELECTED" = "$MODEL" ]; then
-    echo "Pulling active model: $SELECTED"
+    echo "Installing active model: $SELECTED"
   else
-    echo "Pulling: $SELECTED"
+    echo "Installing: $SELECTED"
   fi
-  "$OLLAMA_BIN" pull "$SELECTED"
+  model_ensure "$SELECTED"
   if [ $? -eq 0 ] && [ "$SELECTED" != "$MODEL" ]; then
     read -rp "Make $SELECTED the active model too? [y/N] " ans
     case "$ans" in
@@ -503,38 +534,39 @@ show_context() {
 }
 
 fix_num_ctx() {
-  # Ensure every pulled model has at least nctx running context. Ollama's default
-  # window can be small (e.g. 4096 on some models) and opencode pushes its tool
-  # definitions at the END of the prompt — a too-small window truncates them and
-  # the model "forgets" it has tools like `bash`. Only raises; models already at
-  # or above the floor are skipped.
-  local nctx="${NUM_CTX:-$CTX_FLOOR}"
+  # Ensure a model with num_ctx >= nctx exists for every installed model below
+  # it, by baking a "<name>-<N>k" variant via Modelfile + ollama create (the
+  # ollama REPL /set + /save path is unreliable on some builds). Only creates,
+  # never rebuilds an existing variant and never lowers a window.
+  local nctx="${NUM_CTX:-$CTX_FLOOR}" suffix
   if ! server_up; then
     echo "Server not running — start it with task 1 first."
     return 1
   fi
-  echo "Raising any model below num_ctx=$nctx (NUM_CTX env overrides). Current values: task 16."
-  local name cur fails=0 list_out
+  suffix="$((nctx / 1024))k"
+  echo "Ensuring every installed model has a num_ctx=$nctx variant (NUM_CTX env overrides). Current values: task 16."
+  local name cur eff need failures=0 list_out
   list_out="$("$OLLAMA_BIN" list --format json 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); lst=d if isinstance(d,list) else d.get('models',[]); [print(m.get('name','')) for m in lst]" 2>/dev/null)" || list_out="$("$OLLAMA_BIN" list 2>/dev/null | tail -n +2 | awk '{print $1}')"
   [ -z "$list_out" ] && { echo "No models found via 'ollama list'."; return 1; }
   while IFS= read -r name; do
     [ -z "$name" ] && continue
     echo "== $name =="
-    cur="$(model_builtin_ctx "$name")"
-    if [ -n "$cur" ] && [ "$cur" -ge "$nctx" ]; then
-      echo "  ok — already $cur (>= $nctx), skipping"
+    eff="$(model_num_ctx "$name")"
+    [ -n "$eff" ] || eff="$(model_builtin_ctx "$name")"
+    if [ -n "$eff" ] && [ "$eff" -ge "$nctx" ] 2>/dev/null; then
+      echo "  ok — effective window $eff (>= $nctx), nothing to do"
       continue
     fi
-    echo "  raising $([ -n "$cur" ] && echo "$cur -> ")$nctx..."
-    if printf '/set parameter num_ctx %s\n/save %s\n/bye\n' "$nctx" "$name" \
-        | "$OLLAMA_BIN" run "$name" 2>&1 | tail -6; then
-      :
-    else
-      fails=$((fails+1))
+    need="$name-$suffix"
+    if model_installed "$need"; then
+      echo "  ok — baked variant $need already exists"
+      continue
     fi
+    echo "  baking $need (effective window ${eff:-?} < $nctx)..."
+    model_ensure "$need" || failures=$((failures+1))
   done <<< "$list_out"
   echo ""
-  echo "Done (failures: $fails). Verify: ollama show <model> | grep -i context"
+  echo "Done (failures: $failures). Verify: task 16 (variants show num_ctx >= $nctx)."
 }
 
 opencode_bin() {
@@ -722,17 +754,17 @@ use_model() {
   fi
   if ! model_installed "$tag"; then
     echo "Not installed."
-    read -rp "Pull $tag now? [Y/n] " ans
+    read -rp "Install $tag now? [Y/n] " ans
     case "$ans" in
       [Nn]*|n|N|no) echo "Aborted — opencode would fall back to its own default without it."; return 1 ;;
-      *) "$OLLAMA_BIN" pull "$tag" || { echo "Pull failed — aborted."; return 1; } ;;
+      *) model_ensure "$tag" || { echo "Install failed — aborted."; return 1; } ;;
     esac
   fi
   run_opencode
 }
 
 pull_model() {
-  "$OLLAMA_BIN" pull "$MODEL"
+  model_ensure "$MODEL"
 }
 
 test_chat() {
@@ -831,30 +863,37 @@ OC_TERMINAL="in this terminal"
 
 while true; do
   echo ""
-echo "hello_llm_translate — local LLM ($MODEL)"
+echo "hello_llm_translate — local LLM agent ($MODEL)"
 [ "$NEED_INSTALL" = "1" ] && echo "  !  Ollama not installed yet — run task 6"
-echo "  1  Start Ollama server"
-echo "  2  Status (server, active model, opencode default, installed models, CPU/GPU)"
-echo "  3  Stop server"
-echo "  4  Pull model $MODEL"
-echo "  5  Test chat"
-echo "  6  Install Ollama (only if not found)"
-echo "  7  Chat (interactive)"
-echo "  8  OpenCode (agent, local model) — $OC_TERMINAL"
-echo "  9  Hardware analysis (OS/CPU/RAM/GPU)"
-echo "  10 Switch local model (presets + raw name, saves in .model, does NOT launch)"
-echo "  11 Download a model (pick preset or type any name, then optionally activate it)"
-echo "  12 Install global opencode setup (rules + ollama provider/models + default model in ~/.config/opencode)"
-echo "  13 Raise Ollama num_ctx on every model below the floor (prevents tool-def truncation; NUM_CTX override, default $CTX_FLOOR)"
-echo "  14 Show rules in effect (which instructions/AGENTS.md/models a project loads; no launch)"
-echo "  15 Install 'oc' launcher (~/.local/bin/oc: prints rules, then starts opencode in cwd)"
-echo "  16 Context sizes (built-in vs saved num_ctx, flags anything under the $CTX_FLOOR opencode floor)"
-echo ""
-echo "  -- load a model in (activate + pull if needed + start opencode) --"
-echo "  20 qwen3:8b   smallest, fits anywhere (~5 GB)"
-echo "  21 qwen3:14b  recommended agent, verified tool calling (~9 GB)"
-echo "  22 qwen3:32b  strongest verified, needs ~24 GB free RAM"
-echo "  0  Exit"
+
+echo "== server =="
+echo "  1 Start Ollama server"
+echo "  2 Status (server, active model, installed models, CPU/GPU)"
+echo "  3 Stop server"
+echo "  6 Install Ollama (only if not found)"
+
+echo "== chat =="
+echo "  5 Test chat"
+echo "  7 Chat (interactive)"
+
+echo "== models (installed as a <model>-64k variant with num_ctx baked) =="
+echo "  4 Install active model"
+echo "  10 Switch model (presets; saves in .model, does NOT launch)"
+echo "  11 Download/install a model (then optionally activate it)"
+echo "  13 Ensure every model has a 64k context variant (prevents tool truncation)"
+echo "  16 Context-size report (built-in vs baked num_ctx)"
+
+echo "== opencode (local agent) =="
+echo "  8 Launch opencode in a project dir — $OC_TERMINAL"
+echo "  12 Install global opencode setup (rules + provider + default model in ~/.config/opencode)"
+echo "  14 Show rules in effect (what a project loads; no launch)"
+echo "  15 Install 'oc' launcher (~/.local/bin/oc: rules report, then opencode here)"
+echo "  20 Load in qwen3:8b-64k    smallest agent, fits anywhere (~5 GB)"
+echo "  21 Load in qwen3:14b-64k   recommended agent, reliable tool calls (~9 GB)"
+echo "  22 Load in qwen3:32b-64k   strongest agent, needs ~24 GB free RAM"
+echo "  9 Hardware analysis (OS/CPU/RAM/GPU)"
+
+echo "  0 Exit"
   if ! read -rp "Task: " task; then
     break
   fi
@@ -875,9 +914,9 @@ echo "  0  Exit"
     14) show_rules ;;
     15) install_launcher ;;
     16) show_context ;;
-    20) use_model "qwen3:8b" "smallest, fits anywhere" ;;
-    21) use_model "qwen3:14b" "recommended agent, verified tool calling" ;;
-    22) use_model "qwen3:32b" "strongest verified, needs ~24 GB free RAM" ;;
+    20) use_model "qwen3:8b-64k" "smallest agent, fits anywhere" ;;
+    21) use_model "qwen3:14b-64k" "recommended agent, reliable tool calls" ;;
+    22) use_model "qwen3:32b-64k" "strongest agent, needs ~24 GB free RAM" ;;
     0) break ;;
     *) echo "Unknown task" ;;
   esac
