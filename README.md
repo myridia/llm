@@ -1,6 +1,6 @@
 <img src="llm.svg" alt="hello_llm_translate" width="120">
 
-# hello_llm_translate
+# llm
 
 Local LLM toolkit: `ask.sh` manages a private **Ollama** model server on port
 11434 and launches **opencode** with a local `qwen3:14b-64k` agent — fully
