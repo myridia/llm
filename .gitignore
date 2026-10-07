@@ -205,3 +205,8 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Ollama local server runtime files
+.ollama.pid
+.ollama.log
+.model

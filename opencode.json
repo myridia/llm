@@ -1,0 +1,38 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "ollama/qwen3:14b-64k",
+  "instructions": [
+    "AGENTS.md",
+    ".opencode/local-model-rules.md"
+  ],
+  "permission": {
+    "task": {
+      "*": "deny"
+    }
+  },
+  "provider": {
+    "ollama": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama (local)",
+      "options": {
+        "baseURL": "http://127.0.0.1:11434/v1",
+        "apiKey": "ollama"
+      },
+      "models": {
+        "qwen3:14b-64k": {
+          "name": "Qwen3 14B (local, 64k)",
+          "tool_call": true,
+          "reasoning": true,
+          "interleaved": { "field": "reasoning_content" },
+          "options": {
+            "temperature": 0.2
+          },
+          "limit": {
+            "context": 65536,
+            "output": 4096
+          }
+        }
+      }
+    }
+  }
+}
