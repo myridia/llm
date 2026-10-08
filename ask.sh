@@ -128,6 +128,26 @@ model_num_ctx() {
   "$OLLAMA_BIN" show --parameters "$1" 2>/dev/null | grep -ioE 'num_ctx[[:space:]:]+[0-9]+' | grep -oE '[0-9]+' | head -1
 }
 
+ollama_store() {
+  local pid env
+  pid="$(command -v pgrep >/dev/null 2>&1 && pgrep -x ollama 2>/dev/null | head -1)"
+  if [ -n "$pid" ]; then
+    env="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep '^OLLAMA_MODELS=' | head -1)"
+    [ -n "$env" ] && { echo "${env#OLLAMA_MODELS=}"; return; }
+  fi
+  echo "${OLLAMA_MODELS:-$HOME/.ollama/models}"
+}
+
+ollama_write() {
+  local store
+  store="$(ollama_store)"
+  if [ ! -w "$store" ] && command -v sudo >/dev/null 2>&1; then
+    sudo OLLAMA_MODELS="$store" "$OLLAMA_BIN" "$@"
+  else
+    "$OLLAMA_BIN" "$@"
+  fi
+}
+
 # A "<base>-<N>k" tag (e.g. qwen3:14b-64k) is a local variant of <base> with
 # num_ctx baked in via Modelfile + ollama create. The ollama REPL
 # (/set parameter num_ctx + /save) is unreliable on some builds — it feeds the
@@ -140,14 +160,14 @@ model_ensure() {
     nctx=$(( ${BASH_REMATCH[2]} * 1024 ))
     if ! model_installed "$base"; then
       echo "Pulling base $base (needed to build $tag)..."
-      "$OLLAMA_BIN" pull "$base" || { echo "Pull failed — $tag needs it."; return 1; }
+      ollama_write pull "$base" || { echo "Pull failed — $tag needs it."; return 1; }
     fi
     echo "Building $tag (PARAMETER num_ctx $nctx, from $base)..."
     mf="$(mktemp)"
     "$OLLAMA_BIN" show --modelfile "$base" > "$mf" 2>/dev/null || { rm -f "$mf"; echo "Failed to read Modelfile for $base."; return 1; }
     sed -i -e '/num_ctx[[:space:]]/d' "$mf"
     printf 'PARAMETER num_ctx %s\n' "$nctx" >> "$mf"
-    if "$OLLAMA_BIN" create "$tag" -f "$mf" >/dev/null 2>&1; then
+    if ollama_write create "$tag" -f "$mf" >/dev/null 2>&1; then
       rm -f "$mf"
       echo "Done: $tag carries num_ctx $nctx."
       return 0
@@ -156,7 +176,7 @@ model_ensure() {
     echo "Failed to create $tag."
     return 1
   fi
-  "$OLLAMA_BIN" pull "$tag"
+  ollama_write pull "$tag"
 }
 
 parse_ps() {
@@ -640,7 +660,7 @@ run_opencode() {
     read -rp "Pull $MODEL now? [Y/n] " ans
     case "$ans" in
       [Nn]*|n|N|no) echo "Aborted."; return 1 ;;
-      *) "$OLLAMA_BIN" pull "$MODEL" || { echo "Pull failed — aborted."; return 1; } ;;
+      *) ollama_write pull "$MODEL" || { echo "Pull failed — aborted."; return 1; } ;;
     esac
   fi
   local proj_prompt="${PROJECT:-$PWD}"
