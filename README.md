@@ -42,33 +42,44 @@ OpenAI-compatible server on port 11434, usable directly by opencode and by
 command-line chat (host and containers).
 
 ### `ask.sh` menu (grouped)
+
+`./ask.sh` is a thin dispatcher: the menu is generated from the task modules in
+`ask.d/` — one file per task, each carrying `# id:` / `# group:` / `# desc:`
+metadata; shared helpers/state live in `ask.d/lib.sh`. Adding a task = adding a
+file; the menu, groups and numbering update themselves.
+
 ```
-== server ==
+== SERVER ==
   1 Start Ollama server
-  2 Status (server, active model, installed models, CPU/GPU)
+  2 Status (server, model, models, CPU/GPU)
   3 Stop server
   6 Install Ollama (only if not found)
 
-== chat ==
+== CHAT ==
   5 Test chat
   7 Chat (interactive)
 
-== models (installed as a <model>-64k variant with num_ctx baked) ==
+== MODELS (installed as a <model>-64k variant with num_ctx baked) ==
   4  Install active model
-  16 Context-size report (built-in vs baked num_ctx)
-  17 List all installed models (sizes + store location)
-  18 Delete ALL installed models (destructive, needs a typed YES to run)
+  16 Context-size report (built-in vs num_ctx)
+  17 List all installed models (sizes + store)
+  18 Delete ALL models (typed YES)
+  21 Use qwen3:14b-64k (the working agent)
 
-== opencode (local agent) ==
-  8  Launch opencode in a project dir (default cwd; new kitty window)
-  12 Install global opencode setup (rules + provider + default model)
-  14 Show rules in effect (no launch)
-  15 Install 'oc' launcher (~/.local/bin/oc)
-  21 Load in qwen3:14b-64k     the working agent (+ launch opencode)
-  9  Hardware analysis
+== OPENCODE ==
+  8  Launch opencode (kitty if present)
+  12 Install global opencode setup
+  14 Show rules in effect (what a project loads)
+  15 Install oc launcher (~/.local/bin/oc)
+
+== SYSTEM ==
+  9  Hardware analysis (OS/CPU/RAM/GPU)
 
   0 Exit
 ```
+
+Also: `./ask.sh --rules [dir]` (print what a project loads), `./ask.sh --ensure-rules`,
+`./ask.sh --help`.
 
 How models get installed (task 4/21) — **numbered variants, not REPL saves**:
 - `model_ensure "<name>"` builds a deterministic `<name>-64k` variant: `ollama show "<name>" --modelfile` → strip `num_ctx`/`PARAMETER` lines → append `PARAMETER num_ctx 65536` → `ollama create "<name>-64k"`. A plain raw name (no `<base>-<N>k` shape) falls through to `ollama pull`. This is why all models are used through `-64k` tags — the interactive `/set parameter num_ctx` + `/save` REPL path is unreliable on some builds (slash lines get fed to the model as chat), so task 4/21 bake the variant automatically on install. It only creates; it never rebuilds an existing variant and never lowers a window.
